@@ -154,7 +154,10 @@ def extract(html, url, source):
     soup = BeautifulSoup(html, "html.parser")
     h = soup.find("h1")
     og = soup.find("meta", property="og:title")
-    title = (h.get_text(" ", strip=True) if h else "") or (og.get("content", "") if og else "")
+    title_tag = soup.find("title")
+    title = ((h.get_text(" ", strip=True) if h else "")
+             or (og.get("content", "") if og else "")
+             or (title_tag.get_text(" ", strip=True) if title_tag else ""))
     if not title or not HOME.search(title):
         return None
     visible = BeautifulSoup(html, "html.parser")
@@ -232,6 +235,7 @@ def main():
     fetcher = PublicSession()
     for i, s in enumerate(chosen, 1):
         found, fresh_count = 0, 0
+        issue_codes = []
         page, code = fetcher.get(s["url"], s["url"])
         if page and s["status"] == "SITE":
             discovered = discover(page[1], page[0])
@@ -245,9 +249,11 @@ def main():
             for link in links:
                 detail, subcode = fetcher.get(link, s["url"])
                 if not detail:
+                    issue_codes.append(subcode)
                     continue
                 record = extract(detail[1], detail[0], s["nome"])
                 if not record:
+                    issue_codes.append("SEM_TIPO_RESIDENCIAL_NO_TITULO")
                     continue
                 found += 1
                 old = cache.get(record["id"])
@@ -258,8 +264,9 @@ def main():
                 cache[record["id"]] = record
             if links and not found:
                 code = "DETALHES_NAO_RECONHECIDOS"
-        statuses.append({"imobiliaria": s["nome"], "status": code, "detalhes": found, "novos": fresh_count})
-        print(f"{i}/{len(chosen)} {s['nome']}: {code}; {found} anúncios reconhecidos; {fresh_count} novos", flush=True)
+        diagnostico = ";".join(sorted(set(issue_codes))) if issue_codes else ""
+        statuses.append({"imobiliaria": s["nome"], "status": code, "detalhes": found, "novos": fresh_count, "diagnostico": diagnostico})
+        print(f"{i}/{len(chosen)} {s['nome']}: {code}; {found} anúncios reconhecidos; {fresh_count} novos; diagnostico: {diagnostico}", flush=True)
     for s in all_sources:
         if s in chosen:
             continue
@@ -270,7 +277,7 @@ def main():
               "total_mensal", "aluguel", "condominio", "iptu", "descoberto_em", "observado_em", "url"]
     write_csv(OUT / "catalogo.csv", list(cache.values()), fields)
     write_csv(OUT / "novos.csv", fresh, fields)
-    write_csv(OUT / "status_fontes.csv", statuses, ["imobiliaria", "status", "detalhes", "novos"])
+    write_csv(OUT / "status_fontes.csv", statuses, ["imobiliaria", "status", "detalhes", "novos", "diagnostico"])
     sync = sheet_sync(fresh)
     result = {"executado_em": timestamp(), "cadastradas": len(all_sources), "elegiveis": 45,
               "com_url": len(eligible), "testadas": len(chosen), "anuncios_no_historico": len(cache),

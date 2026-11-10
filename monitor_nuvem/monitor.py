@@ -8,9 +8,10 @@ import json
 import os
 import re
 import time
+import unicodedata
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urljoin, urlparse, urlunparse, parse_qsl, urlencode
+from urllib.parse import urljoin, urlparse, urlunparse, parse_qsl, urlencode, unquote
 from urllib.robotparser import RobotFileParser
 from zoneinfo import ZoneInfo
 
@@ -30,6 +31,10 @@ NUM = re.compile(r"\b(\d{1,2})\s*(?:quartos?|dormit[oó]rios?)\b", re.I)
 
 def timestamp():
     return datetime.now(ZoneInfo("America/Sao_Paulo")).isoformat(timespec="seconds")
+
+def fold(s):
+    value = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode().lower()
+    return re.sub(r"[^a-z0-9]+", " ", value).strip()
 
 def normalized(url):
     p = urlparse(url)
@@ -167,18 +172,24 @@ def extract(html, url, source):
     locations = [title]
     for tag in soup.select("[itemprop=addressLocality]")[:3]:
         locations.append(tag.get_text(" ", strip=True))
-    locale = " ".join(locations).lower()
-    city = next((c for c in CITIES if c.lower() in locale), "")
-    total = price(text, r"(?:valor\s+total(?:\s+aprox\.)?|total\s+mensal|pacote\s+mensal)")
+    # A URL propria do anuncio ajuda quando o H1 nao informa a cidade.
+    locale = fold(" ".join(locations) + " " + unquote(urlparse(url).path))
+    city = next((c for c in CITIES if re.search(r"\b" + re.escape(fold(c)) + r"\b", locale)), "")
+    reported_total = price(text, r"(?:valor\s+total(?:\s+aprox\.)?|total\s+mensal|pacote\s+mensal)")
     rent = price(text, r"(?:valor\s+do\s+)?aluguel")
     condo = price(text, r"condom[ií]nio")
     iptu = price(text, r"iptu")
-    if total is None and all(v is not None for v in (rent, condo, iptu)):
-        total = round(rent + condo + iptu, 2)
+    computed_total = round(rent + condo + iptu, 2) if all(v is not None for v in (rent, condo, iptu)) else None
+    total = computed_total if computed_total is not None else reported_total
+    divergence = ("SIM" if computed_total is not None and reported_total is not None
+                  and abs(computed_total - reported_total) > 1.0 else
+                  "NAO" if computed_total is not None and reported_total is not None else
+                  "NAO_VERIFICAVEL")
     m = NUM.search(text)
     code = hashlib.sha256(normalized(url).encode()).hexdigest()[:20]
     return {"id": code, "imobiliaria": source, "url": normalized(url), "titulo": title[:220],
             "cidade": city, "quartos": int(m.group(1)) if m else None, "total_mensal": total,
+            "total_informado": reported_total, "divergencia_preco": divergence,
             "aluguel": rent, "condominio": condo, "iptu": iptu,
             "sacada": "SIM" if re.search(r"\b(sacada|varanda)\b", text, re.I) else "NÃO INFORMADO",
             "vaga_coberta": "SIM" if re.search(r"\b(vaga\s+coberta|garagem\s+coberta)\b", text, re.I) else "NÃO INFORMADO",
@@ -212,7 +223,8 @@ def sheet_sync(new):
             row = ["", d["observado_em"], d["observado_em"], "", "", "", d["quartos"],
                    "", d["vaga_coberta"], d["sacada"], "", d["total_mensal"],
                    d["aluguel"], d["condominio"], d["iptu"], d["imobiliaria"],
-                   d["imobiliaria"], d["url"], d["id"], "Novo / revisar"]
+                   d["imobiliaria"], d["url"], d["id"],
+                   "Novo / revisar valor total" if d["divergencia_preco"] == "SIM" else "Novo / revisar"]
             rows.append([safe(v) for v in row])
         if rows:
             ws.append_rows(rows, value_input_option="USER_ENTERED")
@@ -274,14 +286,16 @@ def main():
         statuses.append({"imobiliaria": s["nome"], "status": code, "detalhes": 0, "novos": 0})
     json_save(STATE / "catalog.json", cache)
     fields = ["id", "imobiliaria", "titulo", "cidade", "quartos", "sacada", "vaga_coberta",
-              "total_mensal", "aluguel", "condominio", "iptu", "descoberto_em", "observado_em", "url"]
+              "total_mensal", "total_informado", "divergencia_preco", "aluguel", "condominio",
+              "iptu", "descoberto_em", "observado_em", "url"]
     write_csv(OUT / "catalogo.csv", list(cache.values()), fields)
     write_csv(OUT / "novos.csv", fresh, fields)
     write_csv(OUT / "status_fontes.csv", statuses, ["imobiliaria", "status", "detalhes", "novos", "diagnostico"])
     sync = sheet_sync(fresh)
     result = {"executado_em": timestamp(), "cadastradas": len(all_sources), "elegiveis": 45,
               "com_url": len(eligible), "testadas": len(chosen), "anuncios_no_historico": len(cache),
-              "anuncios_novos": len(fresh), "planilha": sync, "situacoes": {
+              "anuncios_novos": len(fresh), "precos_divergentes": sum(d.get("divergencia_preco") == "SIM" for d in cache.values()),
+              "planilha": sync, "situacoes": {
                   s: len([x for x in statuses if x["status"] == s])
                   for s in sorted({x["status"] for x in statuses})}}
     json_save(OUT / "resumo.json", result)

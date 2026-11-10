@@ -42,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      MONITOR_LIMIT: ${{ github.event_name == 'push' && '1' || inputs.limite_fontes || '5' }}
+      MONITOR_LIMIT: ${{ github.event_name == 'push' && '5' || inputs.limite_fontes || '5' }}
       MAX_DETAILS: ${{ github.event_name == 'push' && '2' || '8' }}
       GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
       GOOGLE_SERVICE_ACCOUNT_JSON_B64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON_B64 }}

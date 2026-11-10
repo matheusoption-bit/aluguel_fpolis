@@ -45,10 +45,23 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(item["cidade"], "Florianópolis")
         self.assertEqual(item["quartos"], 2)
         self.assertEqual(item["total_mensal"], 2450.0)
+        self.assertEqual(item["total_informado"], 2450.0)
+        self.assertEqual(item["divergencia_preco"], "NAO")
         self.assertEqual(item["sacada"], "SIM")
         self.assertEqual(item["vaga_coberta"], "SIM")
         self.assertIsNotNone(item["id"])
         self.assertEqual(price("Aluguel R$ 1.900,00", "aluguel"), 1900.0)
+
+    def test_sum_prices_and_city_from_url(self):
+        html = """<h1>Kitnet/Conjugado 1 Quarto Fundos 25m²</h1><main>
+        Valor Total: R$ 1.230,00. Aluguel: R$ 1.200,00.
+        Condomínio: R$ 150,00. IPTU: R$ 30,00.</main>"""
+        url = "https://imobiliariabiguacu.com.br/imovel/9853/kitnet-1-quarto-bigua%C3%A7u"
+        d = extract(html, url, "Imobiliária Biguaçu")
+        self.assertEqual(d["cidade"], "Biguaçu")
+        self.assertEqual(d["total_informado"], 1230.0)
+        self.assertEqual(d["total_mensal"], 1380.0)
+        self.assertEqual(d["divergencia_preco"], "SIM")
 
     def test_missing_data_is_unknown(self):
         item = extract("<h1>Apartamento 1 quarto São José</h1><p>Aluguel: R$ 1.500,00</p>",

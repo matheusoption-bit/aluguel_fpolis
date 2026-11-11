@@ -29,11 +29,11 @@ Workflow: `.github/workflows/monitor-imoveis.yml`
 - `out/status_fontes.csv`: resultados por imobiliaria, inclusive erros e pendencias;
 - `out/resumo.json`: horario, total, fontes testadas e estado da sincronizacao.
 
-A coleta nao apaga registros antigos por falta de acesso a um site. Deduplicacao inicial por URL canonica; imoveis repetidos em imobiliarias diferentes ainda podem requerer conciliacao.
+A coleta nao apaga registros antigos por falta de acesso a um site. Deduplicacao inicial por URL canonica; imoveis repetidos em imobiliarias diferentes ainda podem requerer conciliacao. O cache do GitHub pode expirar: com credenciais de Sheets, o catálogo antigo pode ser recuperado por URL/ID; sem credenciais o histórico não é durável.
 
 ## Integracao com planilha Santa Luzia
 
-A planilha existe em: https://docs.google.com/spreadsheets/d/1NliaU6OX_hE-Yq4K9DHteLnGnND30dAFGWV2xx8m6P8/edit
+A planilha de destino deve ser fornecida via secret `GOOGLE_SHEET_ID`; nao publicar seu link nem o ID neste repositorio.
 
 Para gravar automaticamente nela:
 1. Em um projeto Google Cloud sob controle do usuario, ativar a **Google Sheets API** e criar uma *service account* de minimo privilegio; gerar credencial JSON de acesso para essa conta e compartilhe **somente essa planilha** com o e-mail da conta de servico como Editora.
@@ -41,13 +41,13 @@ Para gravar automaticamente nela:
 3. Em GitHub > Settings > Secrets and variables > Actions > Repository secrets, criar os segredos:
    - `GOOGLE_SERVICE_ACCOUNT_JSON_B64`: Base64 do JSON;
    - `GOOGLE_SHEET_ID`: ID da planilha (segmento entre `/d/` e `/edit` no link).
-4. Testar manualmente o workflow e conferir a aba `Anúncios`. O motor apenas acrescenta linhas novas cujo ID nao existe na coluna S e nao substitui o historico anterior.
+4. Testar manualmente o workflow e conferir as abas `Anúncios` e `Histórico`. O motor sincroniza o catálogo recuperado, identifica duplicatas por ID e URL, insere novos itens e registra alterações de valores; não apaga anúncios antigos.
 
 **Importante:** a conexao do Google Drive ao ChatGPT NAO equivale a uma credencial reutilizavel pelo GitHub Actions. Sem os segredos, o workflow roda e gera os arquivos, mas a planilha retorna `AGUARDANDO_CREDENCIAL`.
 
 ## Seguranca e custos
 
-O repositorio atual e publico: dados incluidos em fontes, logs e artefatos podem ser visiveis. **Nao inclua enderecos pessoais, senha ou outros dados privados no repositorio.** Mantenha criterios pessoais somente na planilha com acesso controlado ou em configuracoes privadas.
+O repositorio atual e publico: dados incluidos em fontes, logs e artefatos podem ser visiveis. Durante a auditoria, a planilha teve permissao `anyone:writer`; **revisar compartilhamento e restringir antes de liberar credenciais**. **Nao inclua enderecos pessoais, senha ou outros dados privados no repositorio.** Mantenha criterios pessoais somente na planilha com acesso controlado ou em configuracoes privadas.
 
 Usa runners hospedados no GitHub e plano gratuito inicialmente. Podera haver cobranca apenas se as regras do plano/repositorio ou servicos adicionais mudarem; conferir consumo na aba Billing. Nenhuma assinatura paga foi ativada.
 

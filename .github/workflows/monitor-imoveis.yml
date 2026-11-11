@@ -1,7 +1,7 @@
 name: Monitor imobiliario - piloto diario
 on:
   push:
-    branches: [feat/monitor-cloud-piloto-2026-11]
+    branches: [feat/monitor-cloud-piloto-2026-11, feat/sync-sheets-cobertura-2026-11]
     paths:
       - "monitor_nuvem/**"
       - ".github/workflows/monitor-imoveis.yml"

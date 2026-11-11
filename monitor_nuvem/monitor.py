@@ -203,33 +203,109 @@ def write_csv(path, rows, fields):
         for row in rows:
             w.writerow({k: row.get(k, "") for k in fields})
 
-def sheet_sync(new):
+def sheet_row(d):
+    """Converte um anuncio para o contrato A:T da aba Anuncios, sem formulas."""
+    date = d.get("observado_em", "")
+    try:
+        date = datetime.fromisoformat(date).strftime("%d/%m/%Y %H:%M:%S")
+    except (TypeError, ValueError):
+        date = str(date or "")
+    desc = d.get("descoberto_em", "") or d.get("observado_em", "")
+    try:
+        desc = datetime.fromisoformat(desc).strftime("%d/%m/%Y %H:%M:%S")
+    except (TypeError, ValueError):
+        desc = str(desc or "")
+    status = ("Revisar preco e atributos" if d.get("divergencia_preco") == "SIM"
+              else "Revisar sacada e garagem")
+    return ["", desc, date, "", (d.get("cidade") or "") + "/SC" if d.get("cidade") else "",
+            "", d.get("quartos") if d.get("quartos") is not None else "",
+            "", d.get("vaga_coberta", "NÃO INFORMADO"), d.get("sacada", "NÃO INFORMADO"),
+            "", d.get("total_mensal") if d.get("total_mensal") is not None else "",
+            d.get("aluguel") if d.get("aluguel") is not None else "",
+            d.get("condominio") if d.get("condominio") is not None else "",
+            d.get("iptu") if d.get("iptu") is not None else "",
+            d.get("imobiliaria", ""), "Coleta GitHub (automatica)",
+            d.get("url", ""), d.get("id", ""), status]
+
+
+def money_number(value):
+    """Lê dinheiro da planilha (número, 1380,00, R$ 1.380,00)."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    v = str(value or "").strip().replace("R$", "").replace(" ", "")
+    if not v:
+        return None
+    if "," in v:
+        v = v.replace(".", "").replace(",", ".")
+    try:
+        return float(v)
+    except ValueError:
+        return None
+
+
+def sheet_sync(all_records):
+    """Sincroniza TODO o catalogo, nao apenas novos: recupera historico apos perda do cache.
+    Executa somente com credencial de conta de servico configurada em Secrets."""
     secret = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON_B64", "")
     key = os.getenv("GOOGLE_SHEET_ID", "")
     if not secret or not key:
         return "AGUARDANDO_CREDENCIAL"
     try:
         import gspread
-        creds = json.loads(base64.b64decode(secret).decode("utf-8"))
-        ws = gspread.service_account_from_dict(creds).open_by_key(key).worksheet("Anúncios")
-        existing = set(ws.col_values(19)[1:])
-        rows = []
-        def safe(v):
-            s = "" if v is None else str(v)
-            return "'" + s if s.startswith(("=", "+", "-", "@")) else s
-        for d in new:
-            if d["id"] in existing:
+        payload = json.loads(base64.b64decode(secret, validate=True).decode("utf-8"))
+        if payload.get("type") != "service_account":
+            return "CREDENCIAL_NAO_E_SERVICE_ACCOUNT"
+        doc = gspread.service_account_from_dict(payload).open_by_key(key)
+        sheet = doc.worksheet("Anúncios")
+        rows = sheet.get("A1:T", value_render_option="UNFORMATTED_VALUE")
+        by_id, by_url = {}, {}
+        for row_num, row in enumerate(rows[1:], start=2):
+            identifier = str(row[18]).strip() if len(row) > 18 else ""
+            url = str(row[17]).strip() if len(row) > 17 else ""
+            if identifier:
+                by_id.setdefault(identifier, (row_num, row))
+            if url.startswith("https://"):
+                by_url.setdefault(normalized(url), (row_num, row))
+        inserts, price_updates, price_history = [], [], []
+        updated_rows = set()
+        for d in all_records:
+            ident = d.get("id", "")
+            url = d.get("url", "")
+            if not ident or not url.startswith("https://"):
                 continue
-            row = ["", d["observado_em"], d["observado_em"], "", "", "", d["quartos"],
-                   "", d["vaga_coberta"], d["sacada"], "", d["total_mensal"],
-                   d["aluguel"], d["condominio"], d["iptu"], d["imobiliaria"],
-                   d["imobiliaria"], d["url"], d["id"],
-                   "Novo / revisar valor total" if d["divergencia_preco"] == "SIM" else "Novo / revisar"]
-            rows.append([safe(v) for v in row])
-        if rows:
-            ws.append_rows(rows, value_input_option="USER_ENTERED")
-        return "SINCRONIZADO_" + str(len(rows))
+            previous = by_id.get(ident) or by_url.get(normalized(url))
+            if previous is None:
+                inserts.append(sheet_row(d))
+                by_id[ident] = (None, [])
+                by_url[normalized(url)] = (None, [])
+                continue
+            row_num, row = previous
+            if row_num is None or row_num in updated_rows:
+                continue
+            current = d.get("total_mensal")
+            former = money_number(row[11] if len(row) > 11 else "")
+            if current is None or former is None or abs(float(current) - former) < 0.01:
+                continue
+            new_row = sheet_row(d)
+            price_updates.extend([
+                {"range": f"C{row_num}", "values": [[new_row[2]]]},
+                {"range": f"L{row_num}:O{row_num}", "values": [new_row[11:15]]},
+                {"range": f"T{row_num}", "values": [["Preco alterado; conferir"]] },
+            ])
+            price_history.append([new_row[2], ident, "Mudanca de valor",
+                                  former, current, "Ativo", "Ativo",
+                                  "Preco do site; campos podem precisar revisao"])
+            updated_rows.add(row_num)
+        # RAW impede interpretacao de texto externo como formula.
+        if inserts:
+            sheet.append_rows(inserts, value_input_option="RAW")
+        if price_updates:
+            sheet.batch_update(price_updates, value_input_option="RAW")
+        if price_history:
+            doc.worksheet("Histórico").append_rows(price_history, value_input_option="RAW")
+        return f"SINCRONIZADO_NOVOS_{len(inserts)}_PRECOS_{len(price_history)}"
     except Exception as e:
+        # Erro sinalizado no relatorio; nunca envia credenciais ou mensagens do servidor aos logs.
         return "FALHOU_" + type(e).__name__
 
 def main():
@@ -291,7 +367,7 @@ def main():
     write_csv(OUT / "catalogo.csv", list(cache.values()), fields)
     write_csv(OUT / "novos.csv", fresh, fields)
     write_csv(OUT / "status_fontes.csv", statuses, ["imobiliaria", "status", "detalhes", "novos", "diagnostico"])
-    sync = sheet_sync(fresh)
+    sync = sheet_sync(list(cache.values()))
     result = {"executado_em": timestamp(), "cadastradas": len(all_sources), "elegiveis": 45,
               "com_url": len(eligible), "testadas": len(chosen), "anuncios_no_historico": len(cache),
               "anuncios_novos": len(fresh), "precos_divergentes": sum(d.get("divergencia_preco") == "SIM" for d in cache.values()),

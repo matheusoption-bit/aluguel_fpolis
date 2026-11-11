@@ -1,11 +1,17 @@
 """Testes sem internet, sem credenciais e sem alterar a planilha."""
+import base64
+import json
+import os
+import sys
 import tempfile
+import types
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from monitor_nuvem.monitor import (
     PILOT, PublicSession, detail_urls, discover, extract, json_load, json_save,
-    load_sources, normalized, price,
+    load_sources, money_number, normalized, price, sheet_row, sheet_sync,
 )
 
 LIST_HTML = """<html><body>
@@ -81,6 +87,79 @@ class MonitorTests(unittest.TestCase):
         scraper = PublicSession()
         self.assertEqual(scraper.allowed("http://imobiliaria-teste.com.br/")[0], False)
         self.assertEqual(scraper.allowed("file:///etc/passwd")[0], False)
+
+
+    def test_sheet_row_contract_and_unknown_fields(self):
+        d = {"id": "xyz123", "url": "https://example.com/imovel/100", "cidade": "Biguaçu",
+             "imobiliaria": "Exemplo", "observado_em": "2026-11-10T08:21:00-03:00",
+             "descoberto_em": "2026-11-10T08:21:00-03:00", "quartos": 1,
+             "total_mensal": None, "aluguel": 1200.0, "divergencia_preco": "SIM"}
+        row = sheet_row(d)
+        self.assertEqual(len(row), 20)
+        self.assertEqual(row[6], 1)
+        self.assertEqual(row[11], "")
+        self.assertEqual(row[18], "xyz123")
+        self.assertEqual(row[19], "Revisar preco e atributos")
+        self.assertEqual(money_number("R$ 1.380,00"), 1380.0)
+        self.assertEqual(money_number("1380,00"), 1380.0)
+        self.assertEqual(money_number("1380"), 1380.0)
+        self.assertIsNone(money_number(""))
+
+    def test_sheet_sync_creates_new_rows_and_marks_price_change(self):
+        records = [
+            {"id":"fresh","url":"https://example.com/imovel/1","cidade":"Biguaçu",
+             "imobiliaria":"Exemplo","observado_em":"2026-11-10T08:00:00-03:00",
+             "descoberto_em":"2026-11-10T08:00:00-03:00","total_mensal":1380.0,
+             "aluguel":1200.0,"condominio":150.0,"iptu":30.0},
+            {"id":"existing","url":"https://example.com/imovel/2","cidade":"Biguaçu",
+             "imobiliaria":"Exemplo","observado_em":"2026-11-10T08:00:00-03:00",
+             "descoberto_em":"2026-11-10T08:00:00-03:00","total_mensal":1700.0,
+             "aluguel":1600.0,"condominio":80.0,"iptu":20.0}
+        ]
+        class Sheet:
+            def __init__(self, existing=None):
+                self.existing = existing or []
+                self.appended = []
+                self.updated = []
+            def get(self,*args,**kwargs): return self.existing
+            def append_rows(self,rows,**kwargs):
+                self.appended.extend(rows)
+                assert kwargs["value_input_option"] == "RAW"
+            def batch_update(self,updates,**kwargs):
+                self.updated.extend(updates)
+                assert kwargs["value_input_option"] == "RAW"
+        oldrow = [None]*20
+        oldrow[11] = "R$ 1.500,00"
+        oldrow[17] = "https://example.com/imovel/2"
+        oldrow[18] = "existing"
+        ads = Sheet([[""]*20,oldrow])
+        hist = Sheet()
+        class Document:
+            def worksheet(self,name): return ads if name=="Anúncios" else hist
+        class FakeClient:
+            def open_by_key(self,key):
+                assert key=="test-sheet"
+                return Document()
+        fake_gspread = types.SimpleNamespace(
+            service_account_from_dict=lambda creds: FakeClient())
+        encoded = base64.b64encode(json.dumps({"type":"service_account"}).encode()).decode()
+        with patch.dict(os.environ, {"GOOGLE_SERVICE_ACCOUNT_JSON_B64":encoded,
+                                     "GOOGLE_SHEET_ID":"test-sheet"}), patch.dict(
+                                         sys.modules,{"gspread":fake_gspread}):
+            status = sheet_sync(records)
+        self.assertEqual(status,"SINCRONIZADO_NOVOS_1_PRECOS_1")
+        self.assertEqual(len(ads.appended),1)
+        self.assertEqual(ads.appended[0][18],"fresh")
+        self.assertEqual(len(ads.updated),3)
+        self.assertEqual(len(hist.appended),1)
+        self.assertEqual(hist.appended[0][3],1500.0)
+        self.assertEqual(hist.appended[0][4],1700.0)
+
+    def test_sheet_sync_requires_credentials(self):
+        with patch.dict(os.environ, {"GOOGLE_SERVICE_ACCOUNT_JSON_B64":"",
+                                     "GOOGLE_SHEET_ID":""}):
+            self.assertEqual(sheet_sync([]),"AGUARDANDO_CREDENCIAL")
+
 
 
 if __name__ == "__main__":

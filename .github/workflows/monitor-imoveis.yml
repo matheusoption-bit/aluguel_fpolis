@@ -1,7 +1,7 @@
 name: Monitor imobiliario - piloto diario
 on:
   push:
-    branches: [feat/monitor-cloud-piloto-2026-11, feat/sync-sheets-cobertura-2026-11]
+    branches: [feat/monitor-cloud-piloto-2026-11, feat/sync-sheets-cobertura-2026-11, feat/planilha-segredos-zero-2026-11]
     paths:
       - "monitor_nuvem/**"
       - ".github/workflows/monitor-imoveis.yml"
@@ -16,7 +16,7 @@ on:
     - cron: "17 11 * * *"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: monitor-imoveis-${{ github.ref }}
@@ -63,6 +63,22 @@ jobs:
             monitor-nuvem-
       - name: Executar monitor
         run: python monitor_nuvem/monitor.py --limit "$MONITOR_LIMIT" --max-details "$MAX_DETAILS"
+      - name: Exportar anuncios publicos
+        run: |
+          python monitor_nuvem/public_export.py \
+            --catalog monitor_nuvem/out/catalogo.csv \
+            --statuses monitor_nuvem/out/status_fontes.csv \
+            --destination dados_publicos/
+      - name: Publicar catalogo publico no GitHub
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dados_publicos/anuncios_publicos.csv dados_publicos/status_fontes.csv
+          if ! git diff --cached --quiet; then
+            git commit -m "data: atualizar anuncios publicos da coleta diaria"
+            git push origin HEAD:main
+          fi
       - name: Salvar historico incremental
         if: always()
         uses: actions/cache/save@v4

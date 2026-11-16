@@ -1,7 +1,7 @@
 name: Monitor imobiliario - piloto diario
 on:
   push:
-    branches: [feat/monitor-cloud-piloto-2026-11, feat/sync-sheets-cobertura-2026-11, feat/planilha-segredos-zero-2026-11]
+    branches: [main, feat/planilha-segredos-zero-2026-11]
     paths:
       - "monitor_nuvem/**"
       - ".github/workflows/monitor-imoveis.yml"
@@ -38,7 +38,7 @@ jobs:
 
   coletar:
     needs: testes
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/feat/monitor-cloud-piloto-2026-11')
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/feat/monitor-cloud-piloto-2026-11' || github.ref == 'refs/heads/feat/planilha-segredos-zero-2026-11' || github.ref == 'refs/heads/main'))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
